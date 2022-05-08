@@ -33,7 +33,16 @@ const (
 
 type CustomResponseWriter struct {
 	http.ResponseWriter
-	buf *bytes.Buffer
+	buf        *bytes.Buffer
+	statusCode int
+}
+
+func (crw *CustomResponseWriter) Write(p []byte) (int, error) {
+	return crw.buf.Write(p)
+}
+
+func (crw *CustomResponseWriter) WriteHeader(statusCode int) {
+	crw.statusCode = statusCode
 }
 
 type MessageType int
@@ -62,13 +71,37 @@ type Message struct {
 	Message string
 }
 
-type Response struct {
-	Response interface{}
-	Messages []Message
+func (t MessageType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.String())
 }
 
-func (crw *CustomResponseWriter) Write(p []byte) (int, error) {
-	return crw.buf.Write(p)
+type Response struct {
+	Response interface{} `json:"response,omitempty"`
+	Messages []Message   `json:"messages,omitempty"`
+}
+
+var fatalResponse []byte
+
+func init() {
+	var err error
+	fatalRsp := Response{
+		Messages: []Message{{
+			Type:    ERROR_MSG,
+			Message: "could not process response",
+		}},
+	}
+	fatalResponse, err = json.MarshalIndent(fatalRsp, "", "")
+	if err != nil {
+		log.WithError(err).Fatal("could not prepare fatal response")
+	}
+}
+
+func (r *Response) AddErrorMessage(m string) {
+	msg := Message{
+		Type:    ERROR_MSG,
+		Message: m,
+	}
+	r.Messages = append(r.Messages, msg)
 }
 
 func authenticateUser() {
@@ -101,15 +134,25 @@ func factorial(n int) (int64, error) {
 	return r, nil
 }
 
-func handleError(status int, message string, err error) http.Handler {
+func writeResponse(w http.ResponseWriter, statusCode int, r Response) {
+	w.WriteHeader(statusCode)
+	b, err := json.MarshalIndent(r, "", " ")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.WithError(err).Error("could not marshal response object")
+		b = fatalResponse
+	}
+	w.Write(b)
+}
+
+func handleError(statusCode int, response Response, err error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
-			log.WithError(err).Error(message)
+			log.WithError(err).Error(response.Messages)
 		} else {
-			log.Error(message)
+			log.Error(response.Messages)
 		}
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(message))
+		writeResponse(w, statusCode, response)
 	})
 }
 
@@ -118,30 +161,31 @@ func factorialHdl(w http.ResponseWriter, r *http.Request) {
 	v := mux.Vars(r)["number"]
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		message := fmt.Sprintf("Bad parameter: '%s' is not a number", v)
-		handleError(http.StatusBadRequest, message, err).ServeHTTP(w, r)
+		switch {
+		case errors.Is(err, strconv.ErrRange):
+			response.AddErrorMessage(fmt.Sprintf("Bad parameter: number '%s' is out of range", v))
+		default:
+			response.AddErrorMessage(fmt.Sprintf("Bad parameter: '%s' is not a number", v))
+		}
+		handleError(http.StatusBadRequest, response, err).ServeHTTP(w, r)
 		return
 	}
 	log.Infof("Computing factorial(%d)", n)
 	result, err := factorial(n)
-	var ilegalArg *IlegalArgument
+	var ilegalArg IlegalArgument
 	if err != nil {
+		response.AddErrorMessage(err.Error())
 		switch {
 		case errors.As(err, &ilegalArg):
-			handleError(http.StatusBadRequest, err.Error(), nil).ServeHTTP(w, r)
+			handleError(http.StatusBadRequest, response, nil).ServeHTTP(w, r)
 		default:
-			handleError(http.StatusInternalServerError, err.Error(), nil).ServeHTTP(w, r)
+			handleError(http.StatusInternalServerError, response, nil).ServeHTTP(w, r)
 		}
 		return
 	}
 	response.Response = result
-	b, err := json.MarshalIndent(response, "", " ")
-	if err != nil {
-		handleError(http.StatusInternalServerError, "Could not selialize response", err).ServeHTTP(w, r)
-	}
+	writeResponse(w, http.StatusOK, response)
 	saveCache(v, result)
-	w.WriteHeader(http.StatusOK)
-	w.Write(b)
 }
 
 func saveCache(k string, v int64) {
@@ -163,8 +207,14 @@ func cacheHdl(h http.Handler) http.Handler {
 		v, ok := queryCache(k)
 		if ok {
 			log.Infof("Returning cached value for %s", k)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(fmt.Sprintf("Factorial is %d", v)))
+			response := Response{
+				Response: v,
+				Messages: []Message{{
+					Type:    INFO_MSG,
+					Message: "returning cached value",
+				}},
+			}
+			writeResponse(w, http.StatusOK, response)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -189,9 +239,11 @@ func loggingHdl(h http.Handler) http.Handler {
 		crw := &CustomResponseWriter{
 			ResponseWriter: w,
 			buf:            &bytes.Buffer{},
+			statusCode:     200,
 		}
 		h.ServeHTTP(crw, r)
 		log.Info("logging response")
+		w.WriteHeader(crw.statusCode)
 		if _, err := io.Copy(w, crw.buf); err != nil {
 			log.Printf("Failed to send out response: %v", err)
 		}
