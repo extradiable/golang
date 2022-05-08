@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/justinas/alice"
+	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,8 +29,21 @@ var mutex sync.Mutex
 var cache map[string]int64 = make(map[string]int64)
 
 const (
-	DEFAULT_PORT     = 80
-	CTX_REQUEST_GUID = "ctx_request_id"
+	DEFAULT_PORT = 80
+)
+
+type MessageType int
+
+const (
+	INFO_MSG MessageType = iota
+	WARNING_MSG
+	ERROR_MSG
+)
+
+type CtxKey int
+
+const (
+	CTX_REQUEST_GUID CtxKey = iota
 )
 
 type CustomResponseWriter struct {
@@ -45,14 +60,6 @@ func (crw *CustomResponseWriter) WriteHeader(statusCode int) {
 	crw.statusCode = statusCode
 }
 
-type MessageType int
-
-const (
-	INFO_MSG MessageType = iota
-	WARNING_MSG
-	ERROR_MSG
-)
-
 func (t MessageType) String() string {
 	switch t {
 	case INFO_MSG:
@@ -67,8 +74,8 @@ func (t MessageType) String() string {
 }
 
 type Message struct {
-	Type    MessageType
-	Message string
+	Type    MessageType `json:"type"`
+	Message string      `json:"message"`
 }
 
 func (t MessageType) MarshalJSON() ([]byte, error) {
@@ -96,18 +103,27 @@ func authenticateUser() {
 
 type IlegalArgument struct {
 	argument interface{}
+	reason   string
 }
 
 func (err IlegalArgument) Error() string {
-	return fmt.Sprintf("Ilegal Argument: %v", err.argument)
+	if err.reason != "" {
+		return fmt.Sprintf("ilegal argument: %v. reason: %s", err.argument, err.reason)
+	}
+	return fmt.Sprintf("ilegal argument: %v", err.argument)
+}
+
+func NewIlegalArgument(argument interface{}, reason string) error {
+	return IlegalArgument{
+		argument: argument,
+		reason:   reason,
+	}
 }
 
 func factorial(n int) (int64, error) {
 	var err error
 	if n < 0 {
-		err = IlegalArgument{
-			argument: n,
-		}
+		err = NewIlegalArgument(n, "negative numbers are not allowed")
 		return -1, err
 	}
 	var r int64 = 1
@@ -120,12 +136,12 @@ func factorial(n int) (int64, error) {
 	return r, nil
 }
 
-func writeResponse(w http.ResponseWriter, statusCode int, r Response) {
+func writeResponse(w http.ResponseWriter, r *http.Request, statusCode int, rsp Response) {
 	w.WriteHeader(statusCode)
-	b, err := json.MarshalIndent(r, "", " ")
+	b, err := json.MarshalIndent(rsp, "", " ")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.WithError(err).Error("could not marshal response object")
+		serverLog(r.Context()).WithError(err).Error("could not marshal response object")
 		b = fatalResponse
 	}
 	w.Write(b)
@@ -134,11 +150,11 @@ func writeResponse(w http.ResponseWriter, statusCode int, r Response) {
 func handleError(statusCode int, response Response, err error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
-			log.WithError(err).Error(response.Messages)
+			serverLog(r.Context()).WithError(err).Error(response.Messages)
 		} else {
-			log.Error(response.Messages)
+			serverLog(r.Context()).Error(response.Messages)
 		}
-		writeResponse(w, statusCode, response)
+		writeResponse(w, r, statusCode, response)
 	})
 }
 
@@ -156,7 +172,7 @@ func factorialHdl(w http.ResponseWriter, r *http.Request) {
 		handleError(http.StatusBadRequest, response, err).ServeHTTP(w, r)
 		return
 	}
-	log.Infof("Computing factorial(%d)", n)
+	serverLog(r.Context()).Infof("Computing factorial(%d)", n)
 	result, err := factorial(n)
 	if err != nil {
 		response.AddErrorMessage(err.Error())
@@ -169,7 +185,7 @@ func factorialHdl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.Response = result
-	writeResponse(w, http.StatusOK, response)
+	writeResponse(w, r, http.StatusOK, response)
 	saveCache(v, result)
 }
 
@@ -191,7 +207,7 @@ func cacheHdl(h http.Handler) http.Handler {
 		k := mux.Vars(r)["number"]
 		v, ok := queryCache(k)
 		if ok {
-			log.Infof("Returning cached value for %s", k)
+			serverLog(r.Context()).Infof("Returning cached value for %s", k)
 			response := Response{
 				Response: v,
 				Messages: []Message{{
@@ -199,7 +215,7 @@ func cacheHdl(h http.Handler) http.Handler {
 					Message: "returning cached value",
 				}},
 			}
-			writeResponse(w, http.StatusOK, response)
+			writeResponse(w, r, http.StatusOK, response)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -208,7 +224,7 @@ func cacheHdl(h http.Handler) http.Handler {
 
 func authnHdl(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Info("Authenticate")
+		serverLog(r.Context()).Info("Authenticate")
 		h.ServeHTTP(w, r)
 		/*
 			realm := "myRealm"
@@ -220,17 +236,18 @@ func authnHdl(h http.Handler) http.Handler {
 
 func loggingHdl(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Info("logging request")
+		serverLog(r.Context()).Info("logging request")
 		crw := &CustomResponseWriter{
 			ResponseWriter: w,
 			buf:            &bytes.Buffer{},
 			statusCode:     200,
 		}
 		h.ServeHTTP(crw, r)
-		log.Info("logging response")
+		serverLog(r.Context()).Info("logging response")
+		w.Header().Add("Content-Type", "application/json")
 		w.WriteHeader(crw.statusCode)
 		if _, err := io.Copy(w, crw.buf); err != nil {
-			log.Printf("Failed to send out response: %v", err)
+			serverLog(r.Context()).WithError(err).Error("Failed to send out response")
 		}
 	})
 }
@@ -239,8 +256,35 @@ func metricsHdl(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		h.ServeHTTP(w, r)
-		log.Debugf("Processing took %v", time.Since(start))
+		serverLog(r.Context()).Debugf("Processing took %v", time.Since(start))
 	})
+}
+
+func tagIdHdl(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, setGUID(r))
+	})
+}
+
+func getGUID(ctx context.Context) string {
+	value := ctx.Value(CTX_REQUEST_GUID)
+	guid, ok := value.(string)
+	if !ok {
+		log.Warning("key CTX_REQUEST_GUID was not found on context")
+	}
+	return guid
+}
+
+func setGUID(r *http.Request) *http.Request {
+	guid := xid.New()
+	ctx := context.WithValue(r.Context(), CTX_REQUEST_GUID, guid.String())
+	return r.WithContext(ctx)
+}
+
+func serverLog(ctx context.Context) *log.Entry {
+	guid := getGUID(ctx)
+	entry := log.WithField("guid", guid)
+	return entry
 }
 
 func init() {
@@ -248,7 +292,6 @@ func init() {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
 	log.SetReportCaller(false)
-
 	var err error
 	fatalRsp := Response{
 		Messages: []Message{{
@@ -258,7 +301,7 @@ func init() {
 	}
 	fatalResponse, err = json.MarshalIndent(fatalRsp, "", "")
 	if err != nil {
-		log.WithError(err).Fatal("could not prepare fatal response")
+		log.WithError(err).Fatal("Could not prepare fatal response")
 	}
 }
 
@@ -280,7 +323,7 @@ func main() {
 	tlsConfig.NextProtos = []string{"http/1.1"}
 
 	router := mux.NewRouter()
-	chain := alice.New(metricsHdl, loggingHdl, authnHdl, cacheHdl).Then(http.HandlerFunc(factorialHdl))
+	chain := alice.New(tagIdHdl, metricsHdl, loggingHdl, authnHdl, cacheHdl).Then(http.HandlerFunc(factorialHdl))
 	router.Handle("/factorial/{number}", chain)
 
 	srv := &http.Server{
@@ -293,27 +336,3 @@ func main() {
 
 	log.Fatal(srv.ListenAndServe())
 }
-
-/*
-func getGUID(r *http.Request) string {
-	ctx := r.Context()
-	value := ctx.Value(CTX_REQUEST_GUID)
-	guid, ok := value.(string)
-	if !ok {
-		panic("Could not get the GUID from context")
-	}
-	return guid
-}
-
-func setGUID(r *http.Request) *http.Request {
-	guid := xid.New()
-	ctx := context.WithValue(r.Context(), CTX_REQUEST_GUID, guid.String())
-	return r.WithContext(ctx)
-}
-
-func serverLog(ctx context.Context) *log.Entry {
-	guid := ctx.Value(CTX_REQUEST_GUID).(string)
-	entry := log.WithField("guid", guid)
-	return entry
-}
-*/
