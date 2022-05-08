@@ -82,20 +82,6 @@ type Response struct {
 
 var fatalResponse []byte
 
-func init() {
-	var err error
-	fatalRsp := Response{
-		Messages: []Message{{
-			Type:    ERROR_MSG,
-			Message: "could not process response",
-		}},
-	}
-	fatalResponse, err = json.MarshalIndent(fatalRsp, "", "")
-	if err != nil {
-		log.WithError(err).Fatal("could not prepare fatal response")
-	}
-}
-
 func (r *Response) AddErrorMessage(m string) {
 	msg := Message{
 		Type:    ERROR_MSG,
@@ -172,11 +158,10 @@ func factorialHdl(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof("Computing factorial(%d)", n)
 	result, err := factorial(n)
-	var ilegalArg IlegalArgument
 	if err != nil {
 		response.AddErrorMessage(err.Error())
 		switch {
-		case errors.As(err, &ilegalArg):
+		case errors.As(err, &IlegalArgument{}):
 			handleError(http.StatusBadRequest, response, nil).ServeHTTP(w, r)
 		default:
 			handleError(http.StatusInternalServerError, response, nil).ServeHTTP(w, r)
@@ -254,15 +239,27 @@ func metricsHdl(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		h.ServeHTTP(w, r)
-		time.Since(start)
+		log.Debugf("Processing took %v", time.Since(start))
 	})
 }
 
 func init() {
 	log.SetFormatter(&log.TextFormatter{})
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.InfoLevel)
+	log.SetLevel(log.DebugLevel)
 	log.SetReportCaller(false)
+
+	var err error
+	fatalRsp := Response{
+		Messages: []Message{{
+			Type:    ERROR_MSG,
+			Message: "could not process response",
+		}},
+	}
+	fatalResponse, err = json.MarshalIndent(fatalRsp, "", "")
+	if err != nil {
+		log.WithError(err).Fatal("could not prepare fatal response")
+	}
 }
 
 func main() {
