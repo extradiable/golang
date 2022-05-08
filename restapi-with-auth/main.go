@@ -89,9 +89,36 @@ type Response struct {
 
 var fatalResponse []byte
 
+func (r *Response) AddMessage(t MessageType, msg string) {
+	switch t {
+	case ERROR_MSG:
+		r.AddErrorMessage(msg)
+	case WARNING_MSG:
+		r.AddWarningMessage(msg)
+	case INFO_MSG:
+		r.AddWarningMessage(msg)
+	}
+}
+
 func (r *Response) AddErrorMessage(m string) {
 	msg := Message{
 		Type:    ERROR_MSG,
+		Message: m,
+	}
+	r.Messages = append(r.Messages, msg)
+}
+
+func (r *Response) AddWarningMessage(m string) {
+	msg := Message{
+		Type:    WARNING_MSG,
+		Message: m,
+	}
+	r.Messages = append(r.Messages, msg)
+}
+
+func (r *Response) AddInfoMessage(m string) {
+	msg := Message{
+		Type:    INFO_MSG,
 		Message: m,
 	}
 	r.Messages = append(r.Messages, msg)
