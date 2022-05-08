@@ -240,7 +240,7 @@ func loggingHdl(h http.Handler) http.Handler {
 		crw := &CustomResponseWriter{
 			ResponseWriter: w,
 			buf:            &bytes.Buffer{},
-			statusCode:     200,
+			statusCode:     http.StatusOK,
 		}
 		h.ServeHTTP(crw, r)
 		serverLog(r.Context()).Info("logging response")
