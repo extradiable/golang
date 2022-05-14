@@ -26,7 +26,7 @@ import (
 )
 
 var mutex sync.Mutex
-var cache map[string]int64 = make(map[string]int64)
+var cache map[string]CacheEntry = make(map[string]CacheEntry)
 
 const (
 	DEFAULT_PORT = 80
@@ -73,6 +73,11 @@ func (t MessageType) String() string {
 	}
 }
 
+type CacheEntry struct {
+	Timestamp time.Time
+	Value     interface{}
+}
+
 type Message struct {
 	Type    MessageType `json:"type"`
 	Message string      `json:"message"`
@@ -88,6 +93,7 @@ type Response struct {
 }
 
 var fatalResponse []byte
+var timeoutResponse []byte
 
 func (r *Response) AddMessage(t MessageType, msg string) {
 	switch t {
@@ -128,39 +134,23 @@ func authenticateUser() {
 	fmt.Println("authenticateUser is not implemented")
 }
 
-type IlegalArgument struct {
-	argument interface{}
-	reason   string
-}
-
-func (err IlegalArgument) Error() string {
-	if err.reason != "" {
-		return fmt.Sprintf("ilegal argument: %v. reason: %s", err.argument, err.reason)
-	}
-	return fmt.Sprintf("ilegal argument: %v", err.argument)
-}
-
-func NewIlegalArgument(argument interface{}, reason string) error {
-	return IlegalArgument{
-		argument: argument,
-		reason:   reason,
-	}
-}
-
-func factorial(n int) (int64, error) {
-	var err error
+func collatz(n int64) (int, error) {
 	if n < 0 {
-		err = NewIlegalArgument(n, "negative numbers are not allowed")
-		return -1, err
+		return -1, fmt.Errorf("number has to be greater than zero")
 	}
-	var r int64 = 1
-	for i := 1; i <= n; i++ {
-		r = r * int64(i)
-		if r <= 0 {
-			return 0, fmt.Errorf("integer overflow")
+	for i := 1; ; i++ {
+		if n == 1 {
+			return i, nil
+		}
+		if n%2 == 0 {
+			n = n / 2
+		} else {
+			n = 1 + n*3
+			if n < 0 {
+				return 0, fmt.Errorf("integer overflow")
+			}
 		}
 	}
-	return r, nil
 }
 
 func writeResponse(w http.ResponseWriter, r *http.Request, statusCode int, rsp Response) {
@@ -174,8 +164,22 @@ func writeResponse(w http.ResponseWriter, r *http.Request, statusCode int, rsp R
 	w.Write(b)
 }
 
+func formatErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, strconv.ErrSyntax):
+		nerr := err.(*strconv.NumError)
+		return fmt.Sprintf("parameter '%s' is not a number", nerr.Num)
+	case errors.Is(err, strconv.ErrRange):
+		nerr := err.(*strconv.NumError)
+		return fmt.Sprintf("got out of range error while processing input '%s'", nerr.Num)
+	default:
+		return err.Error()
+	}
+}
+
 func handleError(statusCode int, response Response, err error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response.AddErrorMessage(formatErrorMessage(err))
 		if err != nil {
 			serverLog(r.Context()).WithError(err).Error(response.Messages)
 		} else {
@@ -185,48 +189,74 @@ func handleError(statusCode int, response Response, err error) http.Handler {
 	})
 }
 
-func factorialHdl(w http.ResponseWriter, r *http.Request) {
+func minmaxcollatzHdl(w http.ResponseWriter, r *http.Request) {
 	var response Response
+	var max int
+	var argMax int64
+	ctx := r.Context()
 	v := mux.Vars(r)["number"]
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		switch {
-		case errors.Is(err, strconv.ErrRange):
-			response.AddErrorMessage(fmt.Sprintf("Bad parameter: number '%s' is out of range", v))
-		default:
-			response.AddErrorMessage(fmt.Sprintf("Bad parameter: '%s' is not a number", v))
-		}
 		handleError(http.StatusBadRequest, response, err).ServeHTTP(w, r)
 		return
 	}
-	serverLog(r.Context()).Infof("Computing factorial(%d)", n)
-	result, err := factorial(n)
-	if err != nil {
-		response.AddErrorMessage(err.Error())
-		switch {
-		case errors.As(err, &IlegalArgument{}):
-			handleError(http.StatusBadRequest, response, nil).ServeHTTP(w, r)
-		default:
-			handleError(http.StatusInternalServerError, response, nil).ServeHTTP(w, r)
-		}
+	if n <= 0 {
+		err = fmt.Errorf("number has to be greater than zero")
+		handleError(http.StatusBadRequest, response, err).ServeHTTP(w, r)
 		return
 	}
-	response.Response = result
+	serverLog(r.Context()).Infof("Computing collatz(%d)", n)
+	var i int64
+	for i = 1; i <= int64(n); i++ {
+		select {
+		case <-ctx.Done():
+			serverLog(r.Context()).WithError(ctx.Err()).Warning("Processig was stopped")
+			return
+		default:
+			val, err := collatz(i)
+			if err != nil {
+				break
+			}
+			if val > max {
+				max = val
+				argMax = i
+			}
+		}
+	}
+	if err != nil {
+		handleError(http.StatusInternalServerError, response, err).ServeHTTP(w, r)
+		return
+	}
+	response.Response = struct {
+		Max    int   `json:"max"`
+		Number int64 `json:"number"`
+	}{
+		Max:    max,
+		Number: argMax,
+	}
 	writeResponse(w, r, http.StatusOK, response)
-	saveCache(v, result)
+	saveCache(v, response.Response)
 }
 
-func saveCache(k string, v int64) {
+func saveCache(k string, v interface{}) {
+	log.Debugf("Added key '%s' to cache", k)
 	mutex.Lock()
 	defer mutex.Unlock()
-	cache[k] = v
+	cache[k] = CacheEntry{
+		Timestamp: time.Now(),
+		Value:     v,
+	}
 }
 
-func queryCache(k string) (int64, bool) {
+func queryCache(k string) (interface{}, bool) {
 	mutex.Lock()
 	defer mutex.Unlock()
-	v, ok := cache[k]
-	return v, ok
+	entry, ok := cache[k]
+	if ok {
+		entry.Timestamp = time.Now()
+		cache[k] = entry
+	}
+	return entry.Value, ok
 }
 
 func cacheHdl(h http.Handler) http.Handler {
@@ -276,6 +306,7 @@ func loggingHdl(h http.Handler) http.Handler {
 		if _, err := io.Copy(w, crw.buf); err != nil {
 			serverLog(r.Context()).WithError(err).Error("Failed to send out response")
 		}
+		serverLog(r.Context()).Debug("loggingHdl completed")
 	})
 }
 
@@ -284,6 +315,38 @@ func metricsHdl(h http.Handler) http.Handler {
 		start := time.Now()
 		h.ServeHTTP(w, r)
 		serverLog(r.Context()).Debugf("Processing took %v", time.Since(start))
+	})
+}
+
+func timeoutHdl(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancelCtx := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancelCtx()
+		done := make(chan struct{})
+		panicChan := make(chan any, 1)
+		go func() {
+			defer func() {
+				if p := recover(); p != nil {
+					panicChan <- p
+				}
+			}()
+			h.ServeHTTP(w, r.WithContext(ctx))
+			close(done)
+		}()
+		select {
+		case p := <-panicChan:
+			serverLog(ctx).Warn("Panic caught by timeoutHdl")
+			panic(p)
+		case <-done:
+			switch err := ctx.Err(); err {
+			case context.DeadlineExceeded:
+				serverLog(ctx).Warn("Deadline Exceeded")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write(timeoutResponse)
+			default:
+				serverLog(ctx).Info("timeoutHdl completed in time")
+			}
+		}
 	})
 }
 
@@ -326,9 +389,36 @@ func init() {
 			Message: "could not process response",
 		}},
 	}
-	fatalResponse, err = json.MarshalIndent(fatalRsp, "", "")
+	fatalResponse, err = json.Marshal(fatalRsp)
 	if err != nil {
 		log.WithError(err).Fatal("Could not prepare fatal response")
+	}
+	timeoutRsp := Response{
+		Messages: []Message{{
+			Type:    ERROR_MSG,
+			Message: "deadline exceeded",
+		}},
+	}
+	timeoutResponse, err = json.Marshal(timeoutRsp)
+	if err != nil {
+		log.WithError(err).Fatal("Could not prepare timeout response")
+	}
+}
+
+func monitorCache() {
+	for {
+		select {
+		case <-time.After(time.Duration(30) * time.Second):
+			log.Info("Clean cache")
+			mutex.Lock()
+			for key, entry := range cache {
+				if time.Since(entry.Timestamp) > 60*time.Second {
+					log.Debugf("Key '%s' was deleted from cache", key)
+					delete(cache, key)
+				}
+			}
+			mutex.Unlock()
+		}
 	}
 }
 
@@ -350,16 +440,18 @@ func main() {
 	tlsConfig.NextProtos = []string{"http/1.1"}
 
 	router := mux.NewRouter()
-	chain := alice.New(tagIdHdl, metricsHdl, loggingHdl, authnHdl, cacheHdl).Then(http.HandlerFunc(factorialHdl))
-	router.Handle("/factorial/{number}", chain)
+	chain := alice.New(tagIdHdl, metricsHdl, loggingHdl, timeoutHdl, authnHdl, cacheHdl)
+	router.Handle("/minmaxcollatz/{number}", chain.Then(http.HandlerFunc(minmaxcollatzHdl)))
 
 	srv := &http.Server{
 		Handler:      router,
 		Addr:         fmt.Sprintf("0.0.0.0:%d", serverPort),
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 0,
+		ReadTimeout:  5 * time.Second,
 		TLSConfig:    tlsConfig,
 	}
+
+	go monitorCache()
 
 	log.Fatal(srv.ListenAndServe())
 }
