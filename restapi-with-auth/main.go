@@ -40,10 +40,10 @@ const (
 	ERROR_MSG
 )
 
-type CtxKey int
+type CtxGUIDKey int
 
 const (
-	CTX_REQUEST_GUID CtxKey = iota
+	CTX_REQUEST_GUID CtxGUIDKey = iota
 )
 
 type CustomResponseWriter struct {
