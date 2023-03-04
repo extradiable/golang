@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -81,7 +82,9 @@ func processComplexType(element xmltree.Element) {
 }
 
 func main() {
-	bytes, _ := os.ReadFile("/home/extradiable/NetBeansProjects/tecolote/src/main/resources/cfdv33.xsd")
+	var file = flag.String("f", "", "XSD file")
+	flag.Parse()
+	bytes, _ := os.ReadFile(*file)
 	var elements []*xmltree.Element
 	var err error
 	elements, err = xsd.Normalize(bytes)
