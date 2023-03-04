@@ -29,7 +29,8 @@ var mutex sync.Mutex
 var cache map[string]CacheEntry = make(map[string]CacheEntry)
 
 const (
-	DEFAULT_PORT = 80
+	DEFAULT_PORT    = 80
+	DEFAULT_SM_PORT = 808
 )
 
 type MessageType int
