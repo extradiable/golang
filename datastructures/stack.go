@@ -4,10 +4,6 @@
 
 package datastructures
 
-import "fmt"
-
-var ErrEmptyQueue = fmt.Errorf("the stack is empty")
-
 var threshold float32 = 0.3
 
 // DStack: Dynamic Stack Structure
@@ -44,7 +40,7 @@ func (s *DStack) Push(v interface{}) {
 // The stack is shrinked dinamically and so, the pop operation can take O(n) in the worst case.
 func (s *DStack) Pop() (interface{}, error) {
 	if s.top < 1 {
-		return nil, ErrEmptyQueue
+		return nil, ErrStackUnderflow
 	}
 	s.top--
 	v := s.data[s.top]
