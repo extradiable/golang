@@ -28,6 +28,8 @@ func TestPushAndPop(t *testing.T) {
 	}
 }
 
+// TestUnderflow:
+// Verifies stack underflow is returned apropiately
 func TestUnderflow(t *testing.T) {
 	stack := CreateDStack()
 	iterations := 1024
@@ -35,7 +37,10 @@ func TestUnderflow(t *testing.T) {
 		stack.Push(i)
 	}
 	for i := 0; i < iterations; i++ {
-		stack.Pop()
+		_, err := stack.Pop()
+		if err != nil {
+			t.Fatalf("stack.Pop(): expected nil error got '%v'.", err)
+		}
 	}
 	_, err := stack.Pop()
 	if err != ErrStackUnderflow {
