@@ -1,8 +1,10 @@
-package datastructures
+package stacks
 
 import (
 	"strconv"
 	"testing"
+
+	"github.com/extradiable/golang/ds"
 )
 
 // TestEmptyStack:
@@ -43,7 +45,7 @@ func TestUnderflow(t *testing.T) {
 		}
 	}
 	_, err := stack.Pop()
-	if err != ErrStackUnderflow {
-		t.Fatalf("stack.Pop(): expected '%v' error got '%v'.", ErrStackUnderflow, err)
+	if err != ds.ErrStackUnderflow {
+		t.Fatalf("stack.Pop(): expected '%v' error got '%v'.", ds.ErrStackUnderflow, err)
 	}
 }

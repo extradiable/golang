@@ -2,7 +2,7 @@
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
-package datastructures
+package stacks
 
 var threshold float32 = 0.3
 
@@ -40,7 +40,7 @@ func (s *DStack) Push(v interface{}) {
 // The stack is shrinked dinamically and so, the pop operation can take O(n) in the worst case.
 func (s *DStack) Pop() (interface{}, error) {
 	if s.top < 1 {
-		return nil, ErrStackUnderflow
+		return nil, ds.ErrStackUnderflow
 	}
 	s.top--
 	v := s.data[s.top]
