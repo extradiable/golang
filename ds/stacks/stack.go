@@ -4,6 +4,8 @@
 
 package stacks
 
+import "github.com/extradiable/golang/ds"
+
 var threshold float32 = 0.3
 
 // DStack: Dynamic Stack Structure
