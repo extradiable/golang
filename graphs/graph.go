@@ -2,7 +2,7 @@ package graph
 
 import "fmt"
 
-var NoGraphErr = fmt.Errorf("no graph is associated with this path")
+var ErrNoGraph = fmt.Errorf("no graph is associated with this path")
 
 type OutOfBoundsErr struct {
 	Type  string
@@ -33,7 +33,7 @@ func (p Path) GetLastVertex() int {
 
 func (p Path) Grow(vertexIndex, edgeIndex int) (Path, error) {
 	if p.graph == nil {
-		return p, NoGraphErr
+		return p, ErrNoGraph
 	}
 	if err := p.graph.testVertex(vertexIndex); err != nil {
 		return p, err
