@@ -29,7 +29,7 @@ func TestEmptyStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
-	err = path.TraversePath(g, printPathLabels)
+	err = path.TraversePath(printPathLabels)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}

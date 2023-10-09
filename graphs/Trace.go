@@ -23,7 +23,7 @@ func Trace(g Graph, startVertex int) (Path, error) {
 			continue
 		}
 		visitedEdges[nextEdge] = true
-		path, err = path.Grow(g, nextVertex, nextEdge)
+		path, err = path.Grow(nextVertex, nextEdge)
 		if err != nil {
 			return path, err
 		}

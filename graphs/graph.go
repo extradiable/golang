@@ -2,14 +2,26 @@ package graph
 
 import "fmt"
 
-type path struct {
+var NoGraphErr = fmt.Errorf("no graph is associated with this path")
+
+type OutOfBoundsErr struct {
+	Type  string
+	Index int
+}
+
+func (err OutOfBoundsErr) Error() string {
+	return fmt.Sprintf("%s index: %d is out of bounds", err.Type, err.Index)
+}
+
+type out struct {
 	Endpoint int
 	Edge     int
 }
 
 type Path struct {
+	graph *Graph
 	start int
-	out   []path
+	out   []out
 }
 
 func (p Path) GetLastVertex() int {
@@ -19,24 +31,29 @@ func (p Path) GetLastVertex() int {
 	return p.out[len(p.out)-1].Endpoint
 }
 
-func (p Path) Grow(g Graph, endpoint, edge int) (Path, error) {
-	if endpoint < 0 || endpoint > len(g.vertexes) {
-		return p, fmt.Errorf("vertex index: %d is out of bounds", endpoint)
+func (p Path) Grow(vertexIndex, edgeIndex int) (Path, error) {
+	if p.graph == nil {
+		return p, NoGraphErr
 	}
-	if edge < 0 || edge > len(g.edges) {
-		return p, fmt.Errorf("edge index: %d is out of bounds", endpoint)
+	if err := p.graph.testVertex(vertexIndex); err != nil {
+		return p, err
 	}
-	endpoints := g.edges[edge].Endpoints
-	if endpoints[0] != endpoint && endpoints[1] != endpoint {
-		return p, fmt.Errorf("edge: %d is not incident to vertex: %d", edge, endpoint)
+	if err := p.graph.testEdge(edgeIndex); err != nil {
+		return p, err
+	}
+
+	endpoints := p.graph.edges[edgeIndex].Endpoints
+	if endpoints[0] != vertexIndex && endpoints[1] != vertexIndex {
+		return p, fmt.Errorf("edge: %d is not incident to vertex: %d", edgeIndex, vertexIndex)
 	}
 	last := p.GetLastVertex()
 	if endpoints[0] != last && endpoints[1] != last {
-		return p, fmt.Errorf("edge: %d is not incident to vertex: %d", edge, last)
+		return p, fmt.Errorf("edge: %d is not incident to vertex: %d", edgeIndex, last)
 	}
-	p.out = append(p.out, path{
-		Edge:     edge,
-		Endpoint: endpoint,
+
+	p.out = append(p.out, out{
+		Edge:     edgeIndex,
+		Endpoint: vertexIndex,
 	})
 	return p, nil
 }
@@ -49,12 +66,15 @@ func printPath(vi, vj *Vertex, e *Edge) {
 	}
 }
 
-func (p Path) PrintPath(g Graph) {
-	p.TraversePath(g, printPath)
+func (p Path) PrintPath() {
+	p.TraversePath(printPath)
 }
 
-func (p Path) TraversePath(g Graph, fn func(vi, vj *Vertex, e *Edge)) error {
-	vi, err := g.GetVertex(p.start)
+func (p Path) TraversePath(fn func(vi, vj *Vertex, e *Edge)) error {
+	if p.graph == nil {
+		return fmt.Errorf("no graph associated with this path")
+	}
+	vi, err := p.graph.GetVertex(p.start)
 	if err != nil {
 		return err
 	}
@@ -63,26 +83,23 @@ func (p Path) TraversePath(g Graph, fn func(vi, vj *Vertex, e *Edge)) error {
 		return nil
 	}
 	for _, v := range p.out {
-		edge, err := g.GetEdge(v.Edge)
+		edge, err := p.graph.GetEdge(v.Edge)
 		if err != nil {
 			return err
 		}
-		vj, err := g.GetVertex(v.Endpoint)
+		vj, err := p.graph.GetVertex(v.Endpoint)
 		if err != nil {
 			return err
 		}
 		fn(vi, vj, edge)
-		vi, err = g.GetVertex(v.Endpoint)
-		if err != nil {
-			return err
-		}
+		vi = vj
 	}
 	return nil
 }
 
 type Vertex struct {
 	id   int
-	out  []path
+	out  []out
 	Data interface{}
 }
 
@@ -114,23 +131,23 @@ func (g Graph) Size() int {
 }
 
 func (g Graph) NewPath(start int) (Path, error) {
-	var path Path
-	path.start = -1
+	var p Path
 	if len(g.vertexes) == 0 {
-		return path, fmt.Errorf("cannot create path out of empty graph")
+		return p, fmt.Errorf("cannot create path out of empty graph")
 	}
-	if start < 0 || start >= len(g.vertexes) {
-		return path, fmt.Errorf("vertex index: %d is out of bounds", start)
+	if err := g.testVertex(start); err != nil {
+		return p, err
 	}
-	path.start = start
-	return path, nil
+	p.graph = &g
+	p.start = start
+	return p, nil
 }
 
 func (g *Graph) AddVertex(data interface{}) int {
 	id := int(len(g.vertexes))
 	v := Vertex{
 		id:   id,
-		out:  make([]path, 0),
+		out:  make([]out, 0),
 		Data: data,
 	}
 	g.vertexes = append(g.vertexes, v)
@@ -138,44 +155,76 @@ func (g *Graph) AddVertex(data interface{}) int {
 }
 
 func (g *Graph) AddEdge(vi, vj int, data interface{}) (int, error) {
-	var e int = -1
-	if vi < 0 || vj < 0 {
-		return e, fmt.Errorf("only positive numbers allowed (%d, %d)", vi, vj)
+	var edgeId int = -1
+	err := g.testVertex(vi)
+	if err != nil {
+		return edgeId, err
 	}
-	if vi >= len(g.vertexes) || vj >= len(g.vertexes) {
-		return e, fmt.Errorf("vertex index is out of bounds (%d, %d)", vi, vj)
+	err = g.testVertex(vj)
+	if err != nil {
+		return edgeId, err
 	}
-	e = len(g.edges)
+	edgeId = len(g.edges)
 	edge := Edge{
-		id:        e,
+		id:        edgeId,
 		Endpoints: []int{vi, vj},
 		Data:      data,
 	}
 	g.edges = append(g.edges, edge)
-	g.vertexes[vi].out = append(g.vertexes[vi].out, path{vj, e})
+	g.vertexes[vi].out = append(g.vertexes[vi].out, out{vj, edgeId})
 	if vi != vj {
-		g.vertexes[vj].out = append(g.vertexes[vj].out, path{vi, e})
+		g.vertexes[vj].out = append(g.vertexes[vj].out, out{vi, edgeId})
 	}
-	return e, nil
+	return edgeId, nil
 }
 
-func (g Graph) GetAdjacencies(vertex int) ([]path, error) {
-	if vertex < 0 || vertex >= len(g.vertexes) {
-		return nil, fmt.Errorf("vertex index: %d is out of bounds", vertex)
+func (g Graph) GetAdjacencies(vertexIndex int) ([]out, error) {
+	if err := g.testVertex(vertexIndex); err != nil {
+		return nil, err
 	}
-	return g.vertexes[vertex].out, nil
+	return g.vertexes[vertexIndex].out, nil
 }
 
-func (g Graph) GetVertex(index int) (*Vertex, error) {
+func (g Graph) GetVertex(vertexIndex int) (*Vertex, error) {
+	if err := g.testVertex(vertexIndex); err != nil {
+		return nil, err
+	}
+	return &g.vertexes[vertexIndex], nil
+}
+
+func (g Graph) GetEdge(edgeIndex int) (*Edge, error) {
+	if err := g.testEdge(edgeIndex); err != nil {
+		return nil, err
+	}
+	return &g.edges[edgeIndex], nil
+}
+
+func (g Graph) vertexExists(index int) bool {
 	if index < 0 || index >= len(g.vertexes) {
-		return nil, fmt.Errorf("vertex index: %d is out of bounds", index)
+		return false
 	}
-	return &g.vertexes[index], nil
+	return true
 }
 
-func (g Graph) GetEdge(index int) (*Edge, error) {
-	if index < 0 || index >= len(g.vertexes) {
-		return nil, fmt.Errorf("edge index: %d is out of bounds", index)
+func (g Graph) testVertex(index int) error {
+	if b := g.vertexExists(index); b {
+		return nil
+	} else {
+		return OutOfBoundsErr{"vertex", index}
 	}
-	return &g.edges[index], nil
+}
+
+func (g Graph) EdgeExists(index int) bool {
+	if index < 0 || index >= len(g.edges) {
+		return false
+	}
+	return true
+}
+
+func (g Graph) testEdge(index int) error {
+	if b := g.EdgeExists(index); b {
+		return nil
+	} else {
+		return OutOfBoundsErr{"edge", index}
+	}
 }
