@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func printPathLabels(vi, vj *Vertex, e *Edge) {
+func printPathLabels(vi, vj *vertex, e *edge) {
 	if e == nil {
 		fmt.Printf("%v\n", vi.Data)
 	} else {
