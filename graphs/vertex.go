@@ -5,7 +5,3 @@ type vertex struct {
 	out  []out
 	Data interface{}
 }
-
-func (v vertex) GetData() interface{} {
-	return v.Data
-}

@@ -5,7 +5,3 @@ type edge struct {
 	endpoints []int
 	Data      interface{}
 }
-
-func (e edge) GetData() interface{} {
-	return e.Data
-}

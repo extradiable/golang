@@ -1,29 +1,35 @@
+// package graphs provides a set of types to represent and manipulate graphs
 package graph
 
 import "fmt"
 
 var ErrNoGraph = fmt.Errorf("no graph is associated with this path")
 
-type OutOfBoundsErr struct {
+var ErrEmptyGraph = fmt.Errorf("graph is empty")
+
+type ErrOutOfBounds struct {
 	Type  string
 	Index int
 }
 
-func (err OutOfBoundsErr) Error() string {
+func (err ErrOutOfBounds) Error() string {
 	return fmt.Sprintf("%s index: %d is out of bounds", err.Type, err.Index)
 }
 
+// a graph consists of a set of vertices V and a set of edges E
+// instances of this type are created as an empty graph
+// the graph can only grow by using the methods: addVertex and addEdge
 type Graph struct {
 	vertexes []vertex
 	edges    []edge
 }
 
-// returns the number of vertices defined in this graph
+// returns the number of vertices (|V|) defined in this graph
 func (g Graph) Order() int {
 	return len(g.vertexes)
 }
 
-// returns the number of edges defined in this graph
+// returns the number of edges (|E|) defined in this graph
 func (g Graph) Size() int {
 	return len(g.edges)
 }
@@ -43,7 +49,7 @@ func (g *Graph) AddVertex(data interface{}) int {
 
 // appends an an undirected edge whose endpoints are V[vi] and V[vj] to this graph
 // returns the id associated with the resulting edge. edges are 0-based indexed.
-// an error is returned if 0 >= vi, vj < len(V)
+// an error is returned if 0 >= vi, vj < |V|
 func (g *Graph) AddEdge(vi, vj int, data interface{}) (int, error) {
 	var edgeId int = -1
 	if err := g.testVertex(vi, vj); err != nil {
@@ -99,17 +105,17 @@ func (g Graph) vertexExists(index int) bool {
 	return true
 }
 
-// returns an error if any of the indexes is out of bounds
+// returns an error if any of the vertex-indexes is out of bounds
 func (g Graph) testVertex(indexList ...int) error {
 	for i := 0; i < len(indexList); i++ {
 		if b := g.vertexExists(indexList[i]); !b {
-			return OutOfBoundsErr{"vertex", indexList[i]}
+			return ErrOutOfBounds{"vertex", indexList[i]}
 		}
 	}
 	return nil
 }
 
-// returns true if 0 >= index < len(E)
+// returns true if 0 >= index < |E|
 // returns false otherwise
 func (g Graph) EdgeExists(index int) bool {
 	if index < 0 || index >= len(g.edges) {
@@ -118,11 +124,11 @@ func (g Graph) EdgeExists(index int) bool {
 	return true
 }
 
-// returns an error if any of the indexes is out of bounds
+// returns an error if any of the edge-indexes is out of bounds
 func (g Graph) testEdge(indexList ...int) error {
 	for i := 0; i < len(indexList); i++ {
 		if b := g.EdgeExists(indexList[i]); !b {
-			return OutOfBoundsErr{"edge", indexList[i]}
+			return ErrOutOfBounds{"edge", indexList[i]}
 		}
 	}
 	return nil

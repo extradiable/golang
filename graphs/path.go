@@ -16,7 +16,7 @@ type Path struct {
 func (g Graph) NewPath(start int) (Path, error) {
 	var p Path
 	if len(g.vertexes) == 0 {
-		return p, fmt.Errorf("cannot create path out of empty graph")
+		return p, ErrEmptyGraph
 	}
 	if err := g.testVertex(start); err != nil {
 		return p, err

@@ -6,19 +6,19 @@ func Trace(g Graph, startVertex int) (Path, error) {
 		return path, err
 	}
 	visitedEdges := make([]bool, g.Size())
-	nextNeighbor := make([]int, g.Order())
+	nextUnvisitedNeighbor := make([]int, g.Order())
 	currentVertex := startVertex
 	for {
 		neighbors, err := g.GetAdjacencies(currentVertex)
 		if err != nil {
 			return path, err
 		}
-		if nextNeighbor[currentVertex] == len(neighbors) {
+		if nextUnvisitedNeighbor[currentVertex] == len(neighbors) {
 			break
 		}
-		neighbor := neighbors[nextNeighbor[currentVertex]]
+		neighbor := neighbors[nextUnvisitedNeighbor[currentVertex]]
 		nextVertex, nextEdge := neighbor.Endpoint, neighbor.Edge
-		nextNeighbor[currentVertex]++
+		nextUnvisitedNeighbor[currentVertex]++
 		if visitedEdges[nextEdge] {
 			continue
 		}
